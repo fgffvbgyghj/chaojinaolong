@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>超级奶龙 · 闯关小游戏（多关卡积分版）</title>
+<style>
+  /* ========== 页面基础样式 ========== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(160deg, #1b2735 0%, #090a0f 100%);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+
+  /* ========== 游戏容器（已放大至 1200 宽）========== */
+  #game-wrap {
+    position: relative;
+    width: 1200px;
+    max-width: 97vw;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #6ec6ff;
+  }
+
+  /* ========== 遮罩层（开始 / 结算）========== */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    background: rgba(10, 15, 25, 0.8);
+    color: #fff;
+    text-align: center;
+    backdrop-filter: blur(3px);
+    z-index: 10;
+  }
+
+  .overlay.hidden { display: none; }
+
+  .overlay h1 {
+    font-size: 46px;
+    letter-spacing: 4px;
+    text-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  }
+
+  .overlay h1 .red  { color: #ff5252; }
+  .overlay h1 .gold { color: #ffd740; }
+  .overlay h1 .green{ color: #69f0ae; }
+
+  .overlay p {
+    font-size: 16px;
+    color: #cfd8dc;
+    line-height: 2;
+  }
+
+  .overlay p kbd {
+    display: inline-block;
+    padding: 2px 9px;
+    margin: 0 2px;
+    background: #37474f;
+    border: 1px solid #607d8b;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 14px;
+    color: #fff;
+  }
+
+  .detail { font-size: 18px; line-height: 2.1; color: #eceff1; }
+  .detail .em { color: #ffd740; font-weight: bold; }
+
+  #result-score {
+    font-size: 34px;
+    color: #ffd740;
+    font-weight: bold;
+    text-shadow: 0 3px 10px rgba(0,0,0,0.5);
+  }
+
+  /* ========== 按钮 ========== */
+  .btn {
+    padding: 14px 52px;
+    font-size: 21px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #fff;
+    background: linear-gradient(180deg, #ff7043, #e53935);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 6px 0 #b71c1c, 0 10px 20px rgba(0, 0, 0, 0.4);
+    transition: transform 0.08s, box-shadow 0.08s;
+  }
+
+  .btn.green {
+    background: linear-gradient(180deg, #66bb6a, #2e7d32);
+    box-shadow: 0 6px 0 #1b5e20, 0 10px 20px rgba(0, 0, 0, 0.4);
+  }
+
+  .btn:hover  { filter: brightness(1.1); }
+  .btn:active { transform: translateY(4px); box-shadow: 0 2px 0 rgba(0,0,0,0.4); }
+</style>
+</head>
+<body>
+
+<div id="game-wrap">
+  <canvas id="game" width="1200" height="675"></canvas>
+
+  <!-- 开始界面 -->
+  <div id="start-overlay" class="overlay">
+    <h1><span class="red">超级奶龙</span><span class="gold">闯关</span></h1>
+    <p>
+      <kbd>A</kbd>/<kbd>←</kbd> 左移 &nbsp;&nbsp;
+      <kbd>D</kbd>/<kbd>→</kbd> 右移 &nbsp;&nbsp;
+      <kbd>W</kbd>/<kbd>空格</kbd> 跳跃<br>
+      收集金币赚取积分，共 <b style="color:#ffd740">3 大关卡</b>，
+      抵达终点旗帜即可进入下一关；<br>
+      通关越快奖励越高，小心滚来滚去的<b style="color:#ff8a65">煤球怪</b>，别掉进深坑！
+    </p>
+    <button id="start-btn" class="btn">开始游戏</button>
+  </div>
+
+  <!-- 结算界面（通关 / Game Over / 全部通关 复用） -->
+  <div id="result-overlay" class="overlay hidden">
+    <h1 id="result-title"></h1>
+    <div id="result-detail" class="detail"></div>
+    <div id="result-score"></div>
+    <button id="result-btn" class="btn"></button>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+ * 超级奶龙 · 横版闯关小游戏（多关卡 + 积分制）
+ * 纯原生 HTML5 Canvas + ES6，无任何外部依赖，单文件直接运行
+ * 模块：常量 / 输入 / 关卡生成 / 物理 / 更新 / 渲染 / 音效 / 结算 / 主循环
+ * ===================================================================== */
+
+/* ---------------- 1. 常量与画布（已放大） ---------------- */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const W = canvas.width;    // 视口宽 1200
+const H = canvas.height;   // 视口高 675
+
+const GRAVITY       = 2200;  // 重力加速度 (px/s²)
+const MOVE_SPEED    = 320;   // 玩家水平速度
+const JUMP_VELOCITY = -870;  // 起跳初速度（最大跳高约 172px，跨距约 253px）
+const GROUND_Y      = 600;   // 地面顶部 y
+
+/* 关卡配置：宽度和难度随关卡递增（空隙均小于跳跃跨距，留足容错） */
+const LEVELS = [
+  { name: "第 1 关 · 绿野平原", width: 6400, gapMin: 120, gapMax: 155, enemies: 11, enemySpeed: 90 },
+  { name: "第 2 关 · 煤球丘陵", width: 7800, gapMin: 130, gapMax: 165, enemies: 15, enemySpeed: 100 },
+  { name: "第 3 关 · 深渊峭壁", width: 9000, gapMin: 140, gapMax: 175, enemies: 18, enemySpeed: 110 },
+];
+const COIN_POINTS   = 10;    // 每枚金币积分
+const CLEAR_BONUS   = 200;   // 每关固定通关奖励
+
+/* ---------------- 2. DOM 引用与游戏状态 ---------------- */
+const startOverlay  = document.getElementById("start-overlay");
+const resultOverlay = document.getElementById("result-overlay");
+const resultTitle   = document.getElementById("result-title");
+const resultDetail  = document.getElementById("result-detail");
+const resultScoreEl = document.getElementById("result-score");
+const resultBtn     = document.getElementById("result-btn");
+
+let state = "ready";              // ready | playing | over | clear | allclear
+let levelIdx = 0;                 // 当前关卡索引
+let score = 0;                    // 总积分
+let levelStartScore = 0;          // 进入本关时的积分（Game Over 重试回档用）
+let levelCoins = 0;               // 本关收集金币数
+let levelTime = 0;                // 本关用时（秒）
+let camX = 0;
+let elapsed = 0;                  // 动画时间
+
+/* 玩家对象（AABB 碰撞盒，体型按奶龙梨形身材略微加宽） */
+const player = {
+  x: 60, y: GROUND_Y - 46, w: 34, h: 46,
+  vx: 0, vy: 0,
+  onGround: false, facing: 1,
+};
+
+let platforms = [];   // 所有实心平台（含地面段）
+let coins     = [];
+let enemies   = [];
+let clouds    = [];
+let levelName = "";
+let levelWidth = 0;
+let finishX = 0;
+
+/* 小工具：[min, max] 随机整数 */
+function rand(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+function randf(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+/* ---------------- 3. 输入处理 ---------------- */
+const keys = new Set();
+const JUMP_KEYS  = new Set(["KeyW", "Space", "ArrowUp"]);
+const LEFT_KEYS  = new Set(["KeyA", "ArrowLeft"]);
+const RIGHT_KEYS = new Set(["KeyD", "ArrowRight"]);
+
+window.addEventListener("keydown", (e) => {
+  if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) {
+    e.preventDefault();   // 阻止空格滚动页面
+  }
+  keys.add(e.code);
+});
+window.addEventListener("keyup", (e) => keys.delete(e.code));
+
+/* ---------------- 4. 关卡程序化生成 ---------------- */
+
+/* 4.1 生成整关：地面段 → 空隙辅助平台 → 悬空平台 → 金币 → 敌人 → 云 */
+function buildLevel(idx) {
+  const cfg = LEVELS[idx];
+  levelName = cfg.name;
+  levelWidth = cfg.width;
+  finishX = levelWidth - 130;
+
+  platforms = [];
+  coins = [];
+  enemies = [];
+
+  /* -- 4.1.1 地面段：随机长度，段间留致命空隙（第一段加长，给开局留出缓冲区） -- */
+  const segments = [];
+  let gx = 0;
+  while (gx < levelWidth - 600) {
+    const segLen = (gx === 0) ? rand(1000, 1200) : rand(560, 960);
+    const end = Math.min(gx + segLen, levelWidth - 420);
+    segments.push({ x: gx, w: end - gx });
+    gx = end + rand(cfg.gapMin, cfg.gapMax);
+  }
+  segments.push({ x: gx, w: levelWidth - gx });   // 最后一段覆盖终点
+
+  for (const seg of segments) {
+    platforms.push({ x: seg.x, y: GROUND_Y, w: seg.w, h: H - GROUND_Y, type: "ground" });
+  }
+
+  /* -- 4.1.2 空隙上方不放任何实心平台（避免撞头卡死），只放金币拱桥 -- */
+  for (let i = 0; i < segments.length - 1; i++) {
+    const gapStart = segments[i].x + segments[i].w;
+    const gapEnd = segments[i + 1].x;
+    // 拱桥中点正好是跳跃轨迹最高点，跳过去就能吃到
+    const cx = (gapStart + gapEnd) / 2;
+    for (let k = -1; k <= 1; k++) {
+      coins.push({
+        x: cx + k * 34,
+        y: GROUND_Y - 148 - (1 - Math.abs(k)) * 30,
+        r: 12, phase: randf(0, Math.PI * 2), taken: false,
+      });
+    }
+  }
+
+  /* -- 4.1.3 悬空平台：高度保证"头顶净空足够、脚下可跳上"，同段内互不重叠 -- */
+  const bases = [];        // 第一层平台
+  const tier2 = [];        // 第二层平台
+  for (const seg of segments) {
+    const n = rand(1, 2);
+    let cursor = seg.x + 220;                 // 起跑缓冲：不在出生点/落地点上方挡路
+    for (let i = 0; i < n; i++) {
+      const pw = rand(130, 180);
+      const px = cursor + rand(0, 60);
+      if (px + pw > seg.x + seg.w - 80) break;      // 不跨越本段边界
+      const plat = {
+        x: px,
+        y: GROUND_Y - rand(112, 142),             // 距地 112~142px：能跳上，且不挡站立
+        w: pw, h: 26, type: "brick",
+      };
+      platforms.push(plat);
+      bases.push(plat);
+      cursor = px + pw + rand(120, 200);            // 与下一块留出通行与助跑空间
+    }
+  }
+  // 第二层：叠在第一层正上方，高差 88~108px（站在下层也能从容跳上）
+  for (const base of bases) {
+    if (Math.random() < 0.4) {
+      const plat = {
+        x: base.x + rand(-15, 15),
+        y: base.y - rand(88, 108),
+        w: rand(110, 150), h: 26, type: "brick",
+      };
+      if (plat.y > 170) {                            // 不顶到顶部 HUD
+        platforms.push(plat);
+        tier2.push(plat);
+      }
+    }
+  }
+  const allBricks = bases.concat(tier2);
+
+  /* -- 4.1.4 金币：平台上方密集撒布 + 地面上散落（金币大幅加量） -- */
+  for (const plat of allBricks) {
+    const n = rand(2, 4);
+    for (let i = 0; i < n; i++) {
+      coins.push({
+        x: plat.x + 18 + Math.random() * (plat.w - 36),
+        y: plat.y - 42 - Math.random() * 26,
+        r: 12, phase: randf(0, Math.PI * 2), taken: false,
+      });
+    }
+  }
+  for (const seg of segments) {
+    const n = rand(6, 9);
+    for (let i = 0; i < n; i++) {
+      coins.push({
+        x: seg.x + 50 + Math.random() * (seg.w - 100),
+        y: GROUND_Y - 48 - Math.random() * 40,
+        r: 12, phase: randf(0, Math.PI * 2), taken: false,
+      });
+    }
+  }
+
+  /* -- 4.1.5 敌人：按段分槽，每只独占一段巡逻区，永不聚成"墙" -- */
+  const totalW = segments.reduce((s, seg) => s + seg.w, 0);
+  let remain = cfg.enemies;
+  segments.forEach((seg, i) => {
+    const quota = (i === segments.length - 1)
+      ? Math.max(0, remain)
+      : Math.max(1, Math.round((seg.w / totalW) * cfg.enemies));
+    remain -= quota;
+    if (quota <= 0) return;
+
+    // 安全区：第一段前 700px 无敌（开局可放心跑），段尾留跳过空隙后的落地区
+    const zoneStart = seg.x + (i === 0 ? 700 : 150);
+    const zoneEnd = seg.x + seg.w - 140;
+    if (zoneEnd - zoneStart < 150) return;          // 空间不足就不放敌人
+    const slot = Math.max(110, (zoneEnd - zoneStart) / quota);
+
+    for (let k = 0; k < quota; k++) {
+      const speed = randf(55, cfg.enemySpeed);
+      const zs = zoneStart + slot * k;                 // 本槽起点
+      const pmin = zs + 10;                            // 巡逻左界（敌人左边缘）
+      const pmax = Math.max(pmin + 15, zs + slot * 0.55);  // 只在本槽前半段来回
+      enemies.push({
+        x: pmin + Math.random() * (pmax - pmin),
+        y: GROUND_Y - 30, w: 30, h: 30,
+        vx: Math.random() < 0.5 ? -speed : speed,
+        min: pmin, max: pmax,
+        anim: randf(0, Math.PI * 2),
+      });
+    }
+  });
+
+  /* -- 4.1.6 背景云（装饰） -- */
+  clouds = [];
+  for (let i = 0; i < levelWidth / 400; i++) {
+    clouds.push({
+      x: Math.random() * levelWidth,
+      y: 40 + Math.random() * 170,
+      s: 0.7 + Math.random() * 0.9,
+    });
+  }
+}
+
+/* ---------------- 5. 关卡加载与重置 ---------------- */
+function loadLevel(idx) {
+  buildLevel(idx);
+  levelStartScore = score;
+  levelCoins = 0;
+  levelTime = 0;
+  camX = 0;
+  elapsed = 0;
+  player.x = 60;
+  player.y = GROUND_Y - player.h;
+  player.vx = 0;
+  player.vy = 0;
+  player.onGround = false;
+  player.facing = 1;
+  state = "playing";
+}
+
+/* ---------------- 6. 物理与碰撞 ---------------- */
+function overlaps(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+/* 玩家移动：先水平后垂直，逐轴解算碰撞；跳跃带"土狼时间"容错 */
+let coyoteTimer = 0;   // 离开平台后仍可起跳的宽限时间
+
+function movePlayer(dt) {
+  player.vx = 0;
+  if ([...LEFT_KEYS].some((k) => keys.has(k)))  { player.vx = -MOVE_SPEED; player.facing = -1; }
+  if ([...RIGHT_KEYS].some((k) => keys.has(k))) { player.vx =  MOVE_SPEED; player.facing =  1; }
+
+  // X 轴：只有地面段完全实心阻挡；砖块平台不挡横向（可以自由从下方/侧面穿过）
+  player.x += player.vx * dt;
+  for (const p of platforms) {
+    if (p.type !== "ground") continue;
+    if (overlaps(player, p)) {
+      if (player.vx > 0) player.x = p.x - player.w;
+      else if (player.vx < 0) player.x = p.x + p.w;
+      player.vx = 0;
+    }
+  }
+  player.x = Math.max(0, Math.min(player.x, levelWidth - player.w));
+
+  // Y 轴 + 重力
+  const prevBottom = player.y + player.h;   // 移动前脚底位置（单向平台判定用）
+  player.vy += GRAVITY * dt;
+  player.y += player.vy * dt;
+  player.onGround = false;
+  for (const p of platforms) {
+    if (!overlaps(player, p)) continue;
+
+    if (p.type === "ground") {
+      // 地面：双向实心
+      if (player.vy > 0) {
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      } else if (player.vy < 0) {
+        player.y = p.y + p.h;
+        player.vy = 0;
+      }
+    } else {
+      // 砖块平台：单向 —— 只有下落且此前脚底在平台顶以上时，才落在平台上
+      // 上升或从下方经过时直接穿过，绝不会被"横杠"挡住撞头
+      if (player.vy >= 0 && prevBottom <= p.y + 6) {
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      }
+    }
+  }
+
+  // 土狼时间：在平台上/刚离开平台边缘的 0.1s 内都能起跳，避免"跳晚了直接掉坑"
+  if (player.onGround) coyoteTimer = 0.1;
+  else coyoteTimer = Math.max(0, coyoteTimer - dt);
+
+  if (coyoteTimer > 0 && [...JUMP_KEYS].some((k) => keys.has(k))) {
+    player.vy = JUMP_VELOCITY;
+    player.onGround = false;
+    coyoteTimer = 0;
+    sfxJump();
+  }
+}
+
+function updateEnemies(dt) {
+  for (const e of enemies) {
+    e.x += e.vx * dt;
+    if (e.x <= e.min) { e.x = e.min; e.vx = Math.abs(e.vx); }
+    if (e.x >= e.max) { e.x = e.max; e.vx = -Math.abs(e.vx); }
+    e.anim += dt * 8;
+  }
+}
+
+function updateCoins() {
+  for (const c of coins) {
+    if (c.taken) continue;
+    const box = { x: c.x - c.r, y: c.y - c.r, w: c.r * 2, h: c.r * 2 };
+    if (overlaps(player, box)) {
+      c.taken = true;
+      levelCoins++;
+      score += COIN_POINTS;
+      sfxCoin();
+    }
+  }
+}
+
+/* 死亡判定：掉入深坑 / 碰到敌人 */
+function checkGameOver() {
+  if (player.y > H + 80) return "fall";
+  for (const e of enemies) {
+    // 判定盒内缩 6px：擦边不算碰撞，手感更宽容（视觉仍是完整煤球）
+    const hitbox = { x: e.x + 6, y: e.y + 6, w: e.w - 12, h: e.h - 6 };
+    if (overlaps(player, hitbox)) return "enemy";
+  }
+  return null;
+}
+
+/* ---------------- 7. 音效（WebAudio 本地合成） ---------------- */
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { audioCtx = null; }
+  }
+}
+function beep(freq, dur, type = "square", vol = 0.12, delay = 0) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime + delay;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  osc.connect(g).connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur);
+}
+const sfxJump = () => beep(520, 0.15, "square", 0.1);
+const sfxCoin = () => { beep(1320, 0.08, "sine", 0.14); beep(1760, 0.12, "sine", 0.14, 0.07); };
+const sfxDie  = () => { beep(300, 0.2, "sawtooth", 0.15); beep(180, 0.35, "sawtooth", 0.15, 0.15); };
+const sfxWin  = () => { [660, 830, 990, 1320].forEach((f, i) => beep(f, 0.15, "triangle", 0.14, i * 0.12)); };
+
+/* ---------------- 8. 渲染 ---------------- */
+function worldToScreenX(x) { return x - camX; }
+
+/* 8.1 背景 */
+function drawBackground() {
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, "#5db9ff");
+  sky.addColorStop(1, "#bfe7ff");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // 远景山丘（视差 0.3）
+  ctx.fillStyle = "#8fd674";
+  for (let i = 0; i < 10; i++) {
+    const hx = i * 900 - (camX * 0.3) % 900 - 200;
+    ctx.beginPath();
+    ctx.arc(hx, H, 210, Math.PI, 0);
+    ctx.fill();
+  }
+
+  // 云（视差 0.55）
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  for (const c of clouds) {
+    const cx = c.x - camX * 0.55;
+    if (cx < -140 || cx > W + 140) continue;
+    const s = c.s;
+    ctx.beginPath();
+    ctx.arc(cx, c.y, 18 * s, 0, Math.PI * 2);
+    ctx.arc(cx + 22 * s, c.y - 8 * s, 22 * s, 0, Math.PI * 2);
+    ctx.arc(cx + 46 * s, c.y, 16 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/* 8.2 平台 */
+function drawPlatforms() {
+  for (const p of platforms) {
+    const sx = worldToScreenX(p.x);
+    if (sx + p.w < -40 || sx > W + 40) continue;
+    if (p.type === "ground") {
+      ctx.fillStyle = "#b07b4f";
+      ctx.fillRect(sx, p.y, p.w, p.h);
+      ctx.fillStyle = "#4caf50";
+      ctx.fillRect(sx, p.y, p.w, 16);
+      ctx.fillStyle = "#388e3c";
+      ctx.fillRect(sx, p.y + 16, p.w, 6);
+      ctx.strokeStyle = "rgba(0,0,0,0.12)";
+      ctx.lineWidth = 2;
+      for (let gx = p.x - (p.x % 60); gx < p.x + p.w; gx += 60) {
+        const gxs = worldToScreenX(gx);
+        ctx.beginPath();
+        ctx.moveTo(gxs, p.y + 22);
+        ctx.lineTo(gxs, p.y + p.h);
+        ctx.stroke();
+      }
+    } else {
+      ctx.fillStyle = "#c1663a";
+      ctx.fillRect(sx, p.y, p.w, p.h);
+      ctx.fillStyle = "#8d4a28";
+      ctx.fillRect(sx, p.y + p.h - 5, p.w, 5);
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.lineWidth = 1.5;
+      for (let bx = p.x; bx < p.x + p.w; bx += 30) {
+        ctx.strokeRect(worldToScreenX(bx) + 1, p.y + 2, 28, p.h - 8);
+      }
+    }
+  }
+}
+
+/* 8.3 金币 */
+function drawCoins() {
+  for (const c of coins) {
+    if (c.taken) continue;
+    const sx = worldToScreenX(c.x);
+    if (sx < -30 || sx > W + 30) continue;
+    const sy = c.y + Math.sin(elapsed * 3 + c.phase) * 4;
+    ctx.fillStyle = "#ffd740";
+    ctx.beginPath();
+    ctx.arc(sx, sy, c.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#e6a817";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.strokeStyle = "#ffe97a";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sx, sy, c.r - 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "#fff8d0";
+    ctx.beginPath();
+    ctx.arc(sx - 3, sy - 3, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/* 8.4 敌人：煤球小怪（黑煤团 + 眼睛 + 嘴巴） */
+function drawEnemies() {
+  for (const e of enemies) {
+    const sx = worldToScreenX(e.x);
+    if (sx + e.w < -40 || sx > W + 40) continue;
+    const sy = e.y;
+    const bounce = Math.abs(Math.sin(e.anim)) * 3;   // 滚动时的弹跳
+    const cy = sy + e.h / 2 - bounce;
+    const look = e.vx > 0 ? 1.6 : -1.6;              // 瞳孔看向移动方向
+
+    // 身体：多个圆叠出凹凸不平的煤球轮廓
+    ctx.fillStyle = "#262626";
+    ctx.beginPath();
+    ctx.arc(sx + e.w * 0.5, cy + 2, e.w * 0.44, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.28, cy + e.h * 0.18, e.w * 0.26, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.72, cy + e.h * 0.18, e.w * 0.26, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.16, cy - e.h * 0.04, e.w * 0.2, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.84, cy - e.h * 0.04, e.w * 0.2, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.5, cy - e.h * 0.24, e.w * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 深灰高光块（体现煤炭质感，克制一些）
+    ctx.fillStyle = "#3a3a3a";
+    ctx.beginPath();
+    ctx.arc(sx + e.w * 0.36, cy - e.h * 0.2, e.w * 0.09, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.24, cy + e.h * 0.02, e.w * 0.06, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.78, cy - e.h * 0.1, e.w * 0.05, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 白色大眼睛 + 黑瞳孔 + 高光点
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.ellipse(sx + e.w * 0.35, cy - 2, 5, 6, 0, 0, Math.PI * 2);
+    ctx.ellipse(sx + e.w * 0.65, cy - 2, 5, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#111";
+    ctx.beginPath();
+    ctx.arc(sx + e.w * 0.35 + look, cy - 1, 2.4, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.65 + look, cy - 1, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(sx + e.w * 0.35 + look - 1, cy - 2.5, 1, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.65 + look - 1, cy - 2.5, 1, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 张嘴笑：黑色口腔 + 白牙 + 红舌头
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.ellipse(sx + e.w * 0.5, cy + 8, 6, 3.8, 0, 0, Math.PI);
+    ctx.fill();
+    ctx.fillStyle = "#e53935";
+    ctx.beginPath();
+    ctx.ellipse(sx + e.w * 0.5, cy + 10, 3.2, 1.8, 0, 0, Math.PI);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(sx + e.w * 0.5 - 4.5, cy + 5.5, 3, 2.5);
+    ctx.fillRect(sx + e.w * 0.5 + 1.5, cy + 5.5, 3, 2.5);
+
+    // 脚下滚落的煤渣
+    ctx.fillStyle = "#1b1b1b";
+    const step = Math.sin(e.anim) * 2;
+    ctx.beginPath();
+    ctx.arc(sx + e.w * 0.22, sy + e.h - 3 + step, 2.5, 0, Math.PI * 2);
+    ctx.arc(sx + e.w * 0.78, sy + e.h - 3 - step, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/* 8.5 玩家：奶龙（黄色梨形身体 + 绿色大眼睛 + 奶白肚皮 + 深棕手脚） */
+function drawPlayer() {
+  const sx = worldToScreenX(player.x);
+  const sy = player.y;
+  const w = player.w, h = player.h;
+  const f = player.facing;
+  const running = player.onGround && player.vx !== 0;
+  const step = running ? Math.sin(elapsed * 14) * 2.5 : 0;            // 跑动时双腿交替
+  const bob  = running ? Math.abs(Math.sin(elapsed * 14)) * 1.2 : 0;  // 轻微上下起伏
+
+  const Y     = "#ffc93c";   // 奶龙主体黄
+  const BELLY = "#f2e3c6";   // 奶白肚皮
+  const LIMB  = "#7b5330";   // 深棕手掌 / 脚掌
+  const GREEN = "#43a047";   // 绿色虹膜
+
+  const cx = sx + w / 2;
+  const top = sy + bob;
+
+  // 双腿（短粗，跑动交替抬起）+ 深棕扁平脚掌
+  ctx.fillStyle = Y;
+  ctx.fillRect(cx - 8, top + h * 0.82 + step * 0.4, 7, h * 0.12);
+  ctx.fillRect(cx + 1, top + h * 0.82 - step * 0.4, 7, h * 0.12);
+  ctx.fillStyle = LIMB;
+  ctx.beginPath();
+  ctx.ellipse(cx - 4.5, top + h * 0.955 + step * 0.4, 6, 3, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx + 4.5, top + h * 0.955 - step * 0.4, 6, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 梨形轮廓：一条完整路径画出「圆头 → 收窄的颈 → 鼓起的大肚子 → 圆底」
+  const hw1 = w * 0.34;   // 头部半宽
+  const hw2 = w * 0.33;   // 脖子最窄处
+  const hw3 = w * 0.46;   // 肚子最宽处
+  const hw4 = w * 0.28;   // 底部半宽
+  ctx.fillStyle = Y;
+  ctx.beginPath();
+  ctx.moveTo(cx, top + h * 0.02);
+  ctx.bezierCurveTo(cx + hw1 * 0.75, top + h * 0.02, cx + hw1, top + h * 0.11, cx + hw1, top + h * 0.22);
+  ctx.bezierCurveTo(cx + hw1, top + h * 0.31, cx + hw2, top + h * 0.37, cx + hw2, top + h * 0.45);
+  ctx.bezierCurveTo(cx + hw2, top + h * 0.55, cx + hw3, top + h * 0.57, cx + hw3, top + h * 0.70);
+  ctx.bezierCurveTo(cx + hw3, top + h * 0.85, cx + hw4 * 1.5, top + h * 0.94, cx, top + h * 0.94);
+  ctx.bezierCurveTo(cx - hw4 * 1.5, top + h * 0.94, cx - hw3, top + h * 0.85, cx - hw3, top + h * 0.70);
+  ctx.bezierCurveTo(cx - hw3, top + h * 0.57, cx - hw2, top + h * 0.55, cx - hw2, top + h * 0.45);
+  ctx.bezierCurveTo(cx - hw2, top + h * 0.37, cx - hw1, top + h * 0.31, cx - hw1, top + h * 0.22);
+  ctx.bezierCurveTo(cx - hw1, top + h * 0.11, cx - hw1 * 0.75, top + h * 0.02, cx, top + h * 0.02);
+  ctx.closePath();
+  ctx.fill();
+
+  // 奶白色肚皮（胸前到小腹的椭圆，不铺满全身）
+  ctx.fillStyle = BELLY;
+  ctx.beginPath();
+  ctx.ellipse(cx + f, top + h * 0.68, w * 0.29, h * 0.23, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 两侧小手臂 + 深棕小手
+  ctx.fillStyle = Y;
+  ctx.beginPath();
+  ctx.ellipse(sx + 3.2, top + h * 0.58 + step * 0.2, 3.8, h * 0.1, -0.1, 0, Math.PI * 2);
+  ctx.ellipse(sx + w - 3.2, top + h * 0.58 - step * 0.2, 3.8, h * 0.1, 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = LIMB;
+  ctx.beginPath();
+  ctx.arc(sx + 2.2, top + h * 0.69 + step * 0.2, 2.8, 0, Math.PI * 2);
+  ctx.arc(sx + w - 2.2, top + h * 0.69 - step * 0.2, 2.8, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 绿色眼睛（小而圆，位于头部上方，瞳孔看向前进方向）
+  const eyeY = top + h * 0.21;
+  const eyeDx = w * 0.145;
+  ctx.fillStyle = GREEN;
+  ctx.beginPath();
+  ctx.arc(cx - eyeDx, eyeY, 4.2, 0, Math.PI * 2);
+  ctx.arc(cx + eyeDx, eyeY, 4.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#1a1a1a";
+  ctx.beginPath();
+  ctx.arc(cx - eyeDx + f * 1.6, eyeY + 0.3, 2.1, 0, Math.PI * 2);
+  ctx.arc(cx + eyeDx + f * 1.6, eyeY + 0.3, 2.1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.arc(cx - eyeDx + f * 1.6 - 0.8, eyeY - 0.6, 0.9, 0, Math.PI * 2);
+  ctx.arc(cx + eyeDx + f * 1.6 - 0.8, eyeY - 0.6, 0.9, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 小小的微笑嘴
+  ctx.strokeStyle = "#c99a1e";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - 3.5 + f, top + h * 0.32);
+  ctx.quadraticCurveTo(cx + f, top + h * 0.345, cx + 3.5 + f, top + h * 0.32);
+  ctx.stroke();
+}
+
+/* 8.6 终点旗帜 */
+function drawFinishFlag() {
+  const sx = worldToScreenX(finishX);
+  if (sx < -70 || sx > W + 70) return;
+  ctx.fillStyle = "#795548";
+  ctx.fillRect(sx, GROUND_Y - 130, 6, 130);
+  ctx.fillStyle = "#4caf50";
+  ctx.beginPath();
+  ctx.moveTo(sx + 6, GROUND_Y - 130);
+  ctx.lineTo(sx + 60, GROUND_Y - 108);
+  ctx.lineTo(sx + 6, GROUND_Y - 86);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 14px sans-serif";
+  ctx.fillText("GOAL", sx + 12, GROUND_Y - 108);
+}
+
+/* 8.7 顶部 HUD：关卡 / 积分 / 进度 */
+function drawHUD() {
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(0, 0, W, 44);
+
+  // 金币图标 + 积分
+  ctx.fillStyle = "#ffd740";
+  ctx.beginPath();
+  ctx.arc(28, 22, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#e6a817";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 22px 'Segoe UI', 'Microsoft YaHei', sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText("积分：" + score, 50, 23);
+
+  // 关卡名（居中）
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#ffd740";
+  ctx.fillText(levelName + "　本关金币 ×" + levelCoins, W / 2, 23);
+
+  // 进度（右侧）
+  const pct = Math.min(100, Math.round((player.x / finishX) * 100));
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#fff";
+  ctx.fillText("进度 " + pct + "%", W - 16, 23);
+  ctx.textAlign = "left";
+}
+
+/* ---------------- 9. 结算界面 ---------------- */
+function showResult(titleHtml, detailHtml, btnText, btnGreen) {
+  resultTitle.innerHTML = titleHtml;
+  resultDetail.innerHTML = detailHtml;
+  resultScoreEl.textContent = "总积分：" + score;
+  resultBtn.textContent = btnText;
+  resultBtn.classList.toggle("green", !!btnGreen);
+  resultOverlay.classList.remove("hidden");
+}
+
+/* 到达终点 → 本关通关结算 */
+function levelComplete() {
+  state = "clear";
+  sfxWin();
+
+  // 积分制：金币积分已在收集时累加；通关奖励 = 固定奖励 + 速度奖励
+  const speedBonus = Math.max(0, Math.round((240 - levelTime) * 2));   // 2 分钟内越快越多
+  const bonus = CLEAR_BONUS + speedBonus;
+  score += bonus;
+
+  const isLast = levelIdx === LEVELS.length - 1;
+  showResult(
+    isLast
+      ? '<span class="gold">🎉 全部通关！</span>'
+      : '<span class="green">第 ' + (levelIdx + 1) + ' 关通关！</span>',
+    "本关用时：<span class='em'>" + levelTime.toFixed(1) + " 秒</span>　" +
+    "收集金币：<span class='em'>" + levelCoins + " 枚（+" + levelCoins * COIN_POINTS + "）</span><br>" +
+    "通关奖励：<span class='em'>+" + CLEAR_BONUS + "</span>　" +
+    "速度奖励：<span class='em'>+" + speedBonus + "</span>",
+    isLast ? "再玩一次" : "进入下一关 ▶",
+    isLast
+  );
+}
+
+/* 死亡 → Game Over（重试回档到本关开始时的积分） */
+function gameOver() {
+  state = "over";
+  sfxDie();
+  showResult(
+    '<span class="red">Game Over</span>',
+    "别灰心！重试将从本关开头继续，积分回档至 <span class='em'>" + levelStartScore + "</span>",
+    "重试本关",
+    false
+  );
+}
+
+/* ---------------- 10. 主循环 ---------------- */
+let lastTime = performance.now();
+
+function loop(now) {
+  const dt = Math.min((now - lastTime) / 1000, 1 / 30);
+  lastTime = now;
+
+  if (state === "playing") {
+    elapsed += dt;
+    levelTime += dt;
+    movePlayer(dt);
+    updateEnemies(dt);
+    updateCoins();
+
+    // 镜头平滑跟随
+    const targetCam = player.x - W * 0.4;
+    camX += (targetCam - camX) * Math.min(1, dt * 8);
+    camX = Math.max(0, Math.min(camX, levelWidth - W));
+
+    const dead = checkGameOver();
+    if (dead) gameOver();
+    else if (player.x + player.w >= finishX) levelComplete();
+  }
+
+  drawBackground();
+  drawPlatforms();
+  drawFinishFlag();
+  drawCoins();
+  drawEnemies();
+  drawPlayer();
+  drawHUD();
+
+  requestAnimationFrame(loop);
+}
+
+/* ---------------- 11. UI 事件绑定 ---------------- */
+document.getElementById("start-btn").addEventListener("click", () => {
+  ensureAudio();
+  levelIdx = 0;
+  score = 0;
+  startOverlay.classList.add("hidden");
+  resultOverlay.classList.add("hidden");
+  loadLevel(0);
+});
+
+resultBtn.addEventListener("click", () => {
+  ensureAudio();
+  resultOverlay.classList.add("hidden");
+  if (state === "clear") {
+    // 下一关；若已是最后一关则从第 1 关重新开始
+    if (levelIdx < LEVELS.length - 1) {
+      levelIdx++;
+      loadLevel(levelIdx);
+    } else {
+      levelIdx = 0;
+      score = 0;
+      loadLevel(0);
+    }
+  } else if (state === "over") {
+    // Game Over 重试：积分回档到本关开始时
+    score = levelStartScore;
+    loadLevel(levelIdx);
+  }
+});
+
+/* ---------------- 启动 ---------------- */
+buildLevel(0);    // 预生成第 1 关，供开始画面背后展示
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
